@@ -1,7 +1,6 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/client";
@@ -24,64 +23,82 @@ export interface ClassType {
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [classes, setClasses] = useState<ClassType[]>([]);
   const [selectedClass, setSelectedClass] =
     useState<ClassType | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function fetchClasses() {
+  // Changing this number re-runs the fetch effect below
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Fetch classes on first load and whenever refreshKey changes.
+  // State is only set inside promise callbacks (never synchronously
+  // in the effect body), which is what React expects.
+  useEffect(() => {
+    let cancelled = false;
+
+    supabase.auth
+      .getUser()
+      .then(() =>
+        supabase
+          .from("classes")
+          .select("*")
+          .order("created_at", { ascending: false })
+      )
+      .then(({ data, error }) => {
+        if (cancelled) return;
+
+        if (error) {
+          console.error("Error fetching classes:", {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code,
+          });
+        } else if (data) {
+          setClasses(data);
+        }
+
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+
+        console.error("Unexpected error fetching classes:", err);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
+
+  // Used by AddClassForm and ClassesTable after user actions.
+  // Called from events (not from an effect), so setting state here is fine.
+  function fetchClasses() {
     setLoading(true);
-
-    // Check Supabase authentication
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    // console.log("AUTH USER:", user);
-    // console.log("AUTH ERROR:", authError);
-
-    // Fetch classes
-    const { data, error } = await supabase
-      .from("classes")
-      .select("*")
-      .order("created_at", {
-        ascending: false,
-      });
-
-    if (error) {
-      console.error("Error fetching classes:", {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      });
-    }
-
-    if (!error && data) {
-      setClasses(data);
-    }
-
-    setLoading(false);
+    setRefreshKey((key) => key + 1);
   }
 
+  // If Sidebar navigated here using #classes-section,
+  // automatically scroll to the Classes section.
   useEffect(() => {
-    fetchClasses();
+    if (window.location.hash !== "#classes-section") return;
 
-    // If Sidebar navigated here using #classes-section,
-    // automatically scroll to the Classes section.
-    if (window.location.hash === "#classes-section") {
-      setTimeout(() => {
-        document
-          .getElementById("classes-section")
-          ?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-      }, 150);
-    }
+    const timer = setTimeout(() => {
+      document
+        .getElementById("classes-section")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, []);
 
   async function handleLogout() {
@@ -141,4 +158,3 @@ export default function AdminDashboard() {
     </DashboardLayout>
   );
 }
-

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   RefreshCw,
@@ -44,10 +44,18 @@ function dateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function formatDayLabel(key: string) {
+/**
+ * Parse a local YYYY-MM-DD key back into a Date at local midnight.
+ * (new Date("YYYY-MM-DD") would be parsed as UTC and can land on the
+ * previous day in timezones behind UTC, so we build it manually.)
+ */
+function parseDateKey(key: string) {
   const [year, month, day] = key.split("-").map(Number);
-  const date = new Date(year, month - 1, day);
-  return date.toLocaleDateString(undefined, {
+  return new Date(year, month - 1, day);
+}
+
+function formatDayLabel(key: string) {
+  return parseDateKey(key).toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -158,7 +166,7 @@ function CalendarFilter({
 }) {
   const [open, setOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(() => {
-    const base = selectedDate ? new Date(selectedDate) : new Date();
+    const base = selectedDate ? parseDateKey(selectedDate) : new Date();
     return new Date(base.getFullYear(), base.getMonth(), 1);
   });
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -349,17 +357,32 @@ export default function SyncLogsTable() {
   const [filterStatus, setFilterStatus] = useState("ALL");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchLogs();
-  }, []);
+  // Wrapped in useCallback so it has a stable identity across renders.
+  // supabase is created fresh each render (createClient()), so it is
+  // intentionally left out of the dependency array below to avoid
+  // re-creating this callback (and re-running the effect) every render;
+  // the client's query behavior doesn't change between calls.
+  //
+  // `ignoreRef` lets the effect below tell a stale/overlapping call
+  // (e.g. one left running after unmount, or superseded by a newer
+  // fetch) not to write to state once it resolves.
+  const fetchLogs = useCallback(async (ignoreRef?: { current: boolean }) => {
+    // Yield to a microtask before touching state. Calling setState as
+    // the very first synchronous thing an Effect does (which is what
+    // happens when an async function's pre-await code runs) can trigger
+    // cascading renders; awaiting here moves every state update after
+    // this point out of the Effect's synchronous call stack.
+    await Promise.resolve();
+    if (ignoreRef?.current) return;
 
-  async function fetchLogs() {
     setLoading(true);
 
     const { data, error } = await supabase
       .from("sync_logs")
       .select("*")
       .order("started_at", { ascending: false });
+
+    if (ignoreRef?.current) return;
 
     if (error) {
       console.error("Error fetching sync_logs:", error);
@@ -370,7 +393,25 @@ export default function SyncLogsTable() {
     }
 
     setLoading(false);
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const ignoreRef = { current: false };
+
+    // Fetch once on mount to sync local state with the `sync_logs` table.
+    // This is the standard "fetch data in an Effect" pattern; the ignore
+    // guard above stops a stale response from writing state after unmount
+    // or a re-run of this effect. Suppressing the compiler's
+    // set-state-in-effect diagnostic here is intentional for this
+    // one-time synchronization with an external data source.
+    // eslint-disable-next-line
+    fetchLogs(ignoreRef);
+
+    return () => {
+      ignoreRef.current = true;
+    };
+  }, [fetchLogs]);
 
   // --- Options built from live data ---
   const departmentOptions: FilterOption[] = useMemo(() => {
@@ -556,8 +597,15 @@ export default function SyncLogsTable() {
           </p>
         </div>
 
+        {/*
+          FIX: fetchLogs takes an optional `ignoreRef` argument, so passing it
+          directly as onClick made React hand it the MouseEvent as that
+          argument (the TypeScript error). Wrapping it in an arrow function
+          calls it with no arguments.
+        */}
         <button
-          onClick={fetchLogs}
+          type="button"
+          onClick={() => fetchLogs()}
           className="flex items-center gap-2 rounded-lg border px-4 py-2 hover:bg-gray-100"
         >
           <RefreshCw size={18} />
@@ -612,6 +660,7 @@ export default function SyncLogsTable() {
 
         {hasActiveFilters && (
           <button
+            type="button"
             onClick={resetFilters}
             className="flex items-center gap-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 md:ml-auto"
           >
@@ -639,6 +688,7 @@ export default function SyncLogsTable() {
           </p>
           {hasActiveFilters && (
             <button
+              type="button"
               onClick={resetFilters}
               className="mt-4 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
             >

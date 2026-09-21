@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Search,
   UserPlus,
   UserMinus,
   RefreshCw,
@@ -35,7 +34,9 @@ interface StudentType {
 
 export default function StudentAssignmentsPage() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [classes, setClasses] = useState<ClassType[]>([]);
   const [students, setStudents] = useState<StudentType[]>([]);
@@ -47,43 +48,68 @@ export default function StudentAssignmentsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
 
-  async function fetchData() {
-    setLoading(true);
+  // Changing this number re-runs the fetch effect below
+  const [refreshKey, setRefreshKey] = useState(0);
 
-    const [classesResult, studentsResult] =
-      await Promise.all([
-        supabase
-          .from("classes")
-          .select("*")
-          .order("created_at", {
-            ascending: false,
-          }),
+  // Load classes and students on first load and whenever refreshKey changes.
+  // State is only set inside the promise callback (never synchronously
+  // in the effect body), which is what React expects.
+  useEffect(() => {
+    let cancelled = false;
 
-        supabase
-          .from("students")
-          .select("*")
-          .order("reg_no"),
-      ]);
+    Promise.all([
+      supabase
+        .from("classes")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
 
-    if (classesResult.error) {
-      console.error(classesResult.error);
-      alert(classesResult.error.message);
-    }
+      supabase
+        .from("students")
+        .select("*")
+        .order("reg_no"),
+    ])
+      .then(([classesResult, studentsResult]) => {
+        if (cancelled) return;
 
-    if (studentsResult.error) {
-      console.error(studentsResult.error);
-      alert(studentsResult.error.message);
-    }
+        if (classesResult.error) {
+          console.error(classesResult.error);
+          alert(classesResult.error.message);
+        }
 
-    setClasses(classesResult.data ?? []);
-    setStudents(studentsResult.data ?? []);
+        if (studentsResult.error) {
+          console.error(studentsResult.error);
+          alert(studentsResult.error.message);
+        }
 
-    setLoading(false);
+        setClasses(classesResult.data ?? []);
+        setStudents(studentsResult.data ?? []);
+
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+
+        console.error("Unexpected error fetching data:", error);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
+
+  // Quietly refetch in the background (no full-page loader)
+  function refreshData() {
+    setRefreshKey((key) => key + 1);
   }
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  // Refresh button: show the loader, then refetch
+  function handleRefresh() {
+    setLoading(true);
+    refreshData();
+  }
 
   async function assignStudent(
     regNo: string
@@ -110,7 +136,7 @@ export default function StudentAssignmentsPage() {
       return;
     }
 
-    await fetchData();
+    refreshData();
   }
 
   async function removeStudent(
@@ -141,7 +167,7 @@ export default function StudentAssignmentsPage() {
       return;
     }
 
-    await fetchData();
+    refreshData();
   }
 
   const selectedClassData = classes.find(
@@ -217,7 +243,7 @@ export default function StudentAssignmentsPage() {
           </div>
 
           <button
-            onClick={fetchData}
+            onClick={handleRefresh}
             className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-gray-700 hover:bg-gray-100"
           >
             <RefreshCw size={18} />

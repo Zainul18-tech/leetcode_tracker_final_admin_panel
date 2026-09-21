@@ -31,7 +31,8 @@ interface Props {
 export default function StudentsTable({
   selectedClass,
 }: Props) {
-  const supabase = createClient();
+  // Create the client once (not on every render) so it is safe as an effect dependency
+  const [supabase] = useState(() => createClient());
 
   async function createActivityLog(action: string, description: string) {
     const {
@@ -51,7 +52,12 @@ export default function StudentsTable({
 
   const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState("");
+
+  // Starts as true because students are fetched as soon as the component mounts
   const [loading, setLoading] = useState(true);
+
+  // Bumping this value re-runs the fetch effect (used by Refresh, edit and delete)
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const [editing, setEditing] = useState<Student | null>(null);
 
@@ -69,22 +75,35 @@ export default function StudentsTable({
   const [filterSection, setFilterSection] = useState("ALL");
 
   useEffect(() => {
-    fetchStudents();
-  }, []);
+    let cancelled = false;
 
-  async function fetchStudents() {
-    setLoading(true);
+    async function loadStudents() {
+      const { data, error } = await supabase
+        .from("students")
+        .select("*")
+        .order("reg_no");
 
-    const { data, error } = await supabase
-      .from("students")
-      .select("*")
-      .order("reg_no");
+      // Ignore the result if the component unmounted or a newer fetch started
+      if (cancelled) return;
 
-    if (!error && data) {
-      setStudents(data);
+      if (!error && data) {
+        setStudents(data);
+      }
+
+      setLoading(false);
     }
 
-    setLoading(false);
+    loadStudents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
+
+  // Called from event handlers (not from an effect), so setting state here is fine.
+  function refreshStudents() {
+    setLoading(true);
+    setRefreshKey((key) => key + 1);
   }
 
   async function deleteStudent(regNo: string) {
@@ -109,7 +128,7 @@ export default function StudentsTable({
       `Student ${regNo}${student?.name ? ` - ${student.name}` : ""} was deleted.`
     );
 
-    fetchStudents();
+    refreshStudents();
   }
 
   function openEdit(student: Student) {
@@ -154,7 +173,7 @@ export default function StudentsTable({
 
     setEditing(null);
 
-    fetchStudents();
+    refreshStudents();
   }
 
   // --- Unique dropdown options derived from students data ---
@@ -243,7 +262,7 @@ export default function StudentsTable({
         </div>
 
         <button
-          onClick={fetchStudents}
+          onClick={refreshStudents}
           className="flex items-center justify-center gap-2 rounded-lg border px-4 py-2 hover:bg-gray-100 sm:justify-start"
         >
           <RefreshCw size={18} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Activity,
   Search,
@@ -25,19 +25,15 @@ interface ActivityLog {
 }
 
 export default function ActivityLogsPage() {
-  const supabase = createClient();
+  // Memoized so the client (and loadLogs) stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // true initially, so no need to set it in the effect
   const [search, setSearch] = useState("");
 
-  useEffect(() => {
-    fetchLogs();
-  }, []);
-
-  async function fetchLogs() {
-    setLoading(true);
-
+  // Only fetches and updates state AFTER the await (async), safe to call from an effect
+  const loadLogs = useCallback(async () => {
     const { data, error } = await supabase
       .from("activity_logs")
       .select("*")
@@ -54,6 +50,13 @@ export default function ActivityLogsPage() {
     }
 
     setLoading(false);
+  }, [supabase]);
+
+
+  // Called from a click event, so setting state here is fine
+  async function handleRefresh() {
+    setLoading(true);
+    await loadLogs();
   }
 
   async function handleLogout() {
@@ -136,28 +139,19 @@ export default function ActivityLogsPage() {
 
   return (
     <DashboardLayout onLogout={handleLogout}>
-
       <div className="space-y-6">
-
         {/* Header */}
-
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-
           <div>
-
             <div className="flex items-center gap-3">
-
               <div className="rounded-xl bg-blue-100 p-3">
-
                 <Activity
                   size={26}
                   className="text-blue-600"
                 />
-
               </div>
 
               <div>
-
                 <h1 className="text-3xl font-bold text-gray-800">
                   Activity Logs
                 </h1>
@@ -165,36 +159,26 @@ export default function ActivityLogsPage() {
                 <p className="mt-1 text-gray-500">
                   Track important activities performed in the admin dashboard.
                 </p>
-
               </div>
-
             </div>
-
           </div>
 
           <button
-            onClick={fetchLogs}
+            onClick={handleRefresh}
             disabled={loading}
             className="flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-gray-700 transition hover:bg-gray-100 disabled:opacity-50"
           >
-
             <RefreshCw
               size={18}
               className={loading ? "animate-spin" : ""}
             />
-
             Refresh
-
           </button>
-
         </div>
 
         {/* Search */}
-
         <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-
           <div className="relative">
-
             <Search
               size={19}
               className="absolute left-4 top-3.5 text-gray-400"
@@ -203,23 +187,16 @@ export default function ActivityLogsPage() {
             <input
               type="text"
               value={search}
-              onChange={(e) =>
-                setSearch(e.target.value)
-              }
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Search activity logs..."
               className="w-full rounded-lg border border-gray-300 bg-white py-3 pl-11 pr-4 text-gray-900 outline-none focus:border-blue-500"
             />
-
           </div>
-
         </div>
 
         {/* Logs */}
-
         <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-
           <div className="border-b border-gray-200 px-6 py-5">
-
             <h2 className="text-xl font-semibold text-gray-800">
               Recent Activities
             </h2>
@@ -227,19 +204,14 @@ export default function ActivityLogsPage() {
             <p className="mt-1 text-sm text-gray-500">
               {filteredLogs.length} activities found
             </p>
-
           </div>
 
           {loading ? (
-
             <div className="py-12 text-center text-gray-500">
               Loading activity logs...
             </div>
-
           ) : filteredLogs.length === 0 ? (
-
             <div className="py-12 text-center">
-
               <Activity
                 size={40}
                 className="mx-auto mb-3 text-gray-300"
@@ -252,22 +224,15 @@ export default function ActivityLogsPage() {
               <p className="mt-1 text-sm text-gray-400">
                 Activities will appear here as actions are performed.
               </p>
-
             </div>
-
           ) : (
-
             <div className="divide-y divide-gray-100">
-
               {filteredLogs.map((log) => (
-
                 <div
                   key={log.id}
                   className="flex items-center gap-4 px-6 py-5 transition hover:bg-gray-50"
                 >
-
                   {/* Icon */}
-
                   <div
                     className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${getIconStyle(
                       log.action
@@ -277,15 +242,11 @@ export default function ActivityLogsPage() {
                   </div>
 
                   {/* Content */}
-
                   <div className="min-w-0 flex-1">
-
                     <div className="flex flex-wrap items-center gap-2">
-
                       <span className="font-semibold text-gray-800">
                         {log.action}
                       </span>
-
                     </div>
 
                     <p className="mt-1 text-sm text-gray-600">
@@ -293,33 +254,19 @@ export default function ActivityLogsPage() {
                     </p>
 
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-400">
-
                       {log.user_email && (
-                        <span>
-                          By: {log.user_email}
-                        </span>
+                        <span>By: {log.user_email}</span>
                       )}
 
-                      <span>
-                        {formatDate(log.created_at)}
-                      </span>
-
+                      <span>{formatDate(log.created_at)}</span>
                     </div>
-
                   </div>
-
                 </div>
-
               ))}
-
             </div>
-
           )}
-
         </div>
-
       </div>
-
     </DashboardLayout>
   );
 }

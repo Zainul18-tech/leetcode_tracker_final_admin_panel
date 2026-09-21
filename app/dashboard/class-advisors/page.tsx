@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/client";
@@ -13,38 +13,67 @@ import ClassAdvisorsTable, {
 
 export default function ClassAdvisorsPage() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [advisors, setAdvisors] = useState<ClassAdvisorType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  async function fetchAdvisors() {
-    setLoading(true);
+  // Changing this number re-runs the fetch effect below
+  const [refreshKey, setRefreshKey] = useState(0);
 
-    const { data, error } = await supabase
-      .from("staff")
-      .select(
-        "id, name, email, role, department, year, section, created_at"
-      )
-      .eq("role", "Class Advisor")
-      .order("created_at", {
-        ascending: false,
+  // Fetch advisors on first load and whenever refreshKey changes.
+  // State is only set inside promise callbacks (never synchronously
+  // in the effect body), which is what React expects.
+  useEffect(() => {
+    let cancelled = false;
+
+    // Promise.resolve() turns Supabase's PromiseLike into a real Promise,
+    // so .catch() is available
+    Promise.resolve(
+      supabase
+        .from("staff")
+        .select(
+          "id, name, email, role, department, year, section, created_at"
+        )
+        .eq("role", "Class Advisor")
+        .order("created_at", {
+          ascending: false,
+        })
+    )
+      .then(({ data, error }) => {
+        if (cancelled) return;
+
+        if (error) {
+          console.error("Error fetching class advisors:", error);
+          alert(error.message);
+          setAdvisors([]);
+        } else {
+          setAdvisors(data ?? []);
+        }
+
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+
+        console.error("Unexpected error fetching class advisors:", error);
+        setAdvisors([]);
+        setLoading(false);
       });
 
-    if (error) {
-      console.error("Error fetching class advisors:", error);
-      alert(error.message);
-      setAdvisors([]);
-    } else {
-      setAdvisors(data ?? []);
-    }
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
 
-    setLoading(false);
+  // Used by AddClassAdvisorForm and ClassAdvisorsTable after user actions.
+  // Called from events (not from an effect), so setting state here is fine.
+  function fetchAdvisors() {
+    setLoading(true);
+    setRefreshKey((key) => key + 1);
   }
-
-  useEffect(() => {
-    fetchAdvisors();
-  }, []);
 
   async function handleLogout() {
     await supabase.auth.signOut();

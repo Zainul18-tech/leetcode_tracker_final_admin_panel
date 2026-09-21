@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 
@@ -17,37 +17,52 @@ interface ClassType {
 }
 
 export default function ImportDataPage() {
-  const supabase = createClient();
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [classes, setClasses] = useState<ClassType[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Fetch classes once on load.
+  // State is only set inside promise callbacks (never synchronously
+  // in the effect body), which is what React expects.
   useEffect(() => {
-    fetchClasses();
-  }, []);
+    let cancelled = false;
 
-  async function fetchClasses() {
-    setLoading(true);
+    // Promise.resolve() turns Supabase's PromiseLike into a real Promise,
+    // so .catch() is available
+    Promise.resolve(
+      supabase
+        .from("classes")
+        .select("id, class_name, department, year, section, batch")
+        .order("created_at", {
+          ascending: false,
+        })
+    )
+      .then(({ data, error }) => {
+        if (cancelled) return;
 
-    const { data, error } = await supabase
-      .from("classes")
-      .select(
-        "id, class_name, department, year, section, batch"
-      )
-      .order("created_at", {
-        ascending: false,
+        if (error) {
+          console.error(error);
+        }
+
+        if (data) {
+          setClasses(data);
+        }
+
+        setLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+
+        console.error("Unexpected error fetching classes:", error);
+        setLoading(false);
       });
 
-    if (error) {
-      console.error(error);
-    }
-
-    if (data) {
-      setClasses(data);
-    }
-
-    setLoading(false);
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   async function handleLogout() {
     await supabase.auth.signOut();

@@ -23,6 +23,31 @@ interface StudentRow {
   github_link: string;
 }
 
+/*
+ * Safely pull a readable message out of an unknown thrown value.
+ *
+ * Supabase errors (PostgrestError) are plain objects with a `message`
+ * field, not `Error` instances, so `err instanceof Error` alone would
+ * miss them. This handles both cases without using `any`.
+ */
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "message" in err &&
+    typeof (err as { message: unknown }).message === "string" &&
+    (err as { message: string }).message
+  ) {
+    return (err as { message: string }).message;
+  }
+
+  return fallback;
+}
+
 export default function UploadStudents() {
   const supabase = createClient();
 
@@ -380,12 +405,11 @@ export default function UploadStudents() {
       setTimeout(() => {
         window.location.reload();
       }, 1000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
 
       setError(
-        err?.message ||
-          "Failed to upload students."
+        getErrorMessage(err, "Failed to upload students.")
       );
     } finally {
       setLoading(false);

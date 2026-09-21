@@ -22,35 +22,52 @@ export interface StaffType {
 
 export default function TutorsPage() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Create the client once (not on every render) so it is safe as an effect dependency
+  const [supabase] = useState(() => createClient());
 
   const [tutors, setTutors] = useState<StaffType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  async function fetchTutors() {
-    setLoading(true);
-
-    const { data, error } = await supabase
-      .from("staff")
-      .select("*")
-      .eq("role", "Tutor")
-      .order("created_at", {
-        ascending: false,
-      });
-
-    if (error) {
-      console.error("Error fetching tutors:", error);
-      setTutors([]);
-    } else {
-      setTutors(data || []);
-    }
-
-    setLoading(false);
-  }
+  // Bumping this value triggers a re-fetch from the effect below
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    fetchTutors();
-  }, []);
+    let cancelled = false;
+
+    async function loadTutors() {
+      const { data, error } = await supabase
+        .from("staff")
+        .select("*")
+        .eq("role", "Tutor")
+        .order("created_at", { ascending: false });
+
+      // Ignore the result if the component unmounted or a newer fetch started
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Error fetching tutors:", error);
+        setTutors([]);
+      } else {
+        setTutors(data || []);
+      }
+
+      setLoading(false);
+    }
+
+    loadTutors();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
+
+  // Called from event handlers / child components (not from an effect),
+  // so setting state here is fine.
+  async function refreshTutors() {
+    setLoading(true);
+    setRefreshKey((key) => key + 1);
+  }
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -61,23 +78,17 @@ export default function TutorsPage() {
 
   return (
     <DashboardLayout onLogout={handleLogout}>
-
       <div className="space-y-8">
-
         {/* Add Tutor */}
-        <AddStaffForm
-          onSuccess={fetchTutors}
-        />
+        <AddStaffForm onSuccess={refreshTutors} />
 
         {/* Tutors Table */}
         <StaffTable
           staff={tutors}
           loading={loading}
-          refreshStaff={fetchTutors}
+          refreshStaff={refreshTutors}
         />
-
       </div>
-
     </DashboardLayout>
   );
 }

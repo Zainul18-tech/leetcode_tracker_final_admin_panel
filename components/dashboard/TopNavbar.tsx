@@ -4,14 +4,11 @@ import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
-  Bell,
   ChevronDown,
   Menu,
   UserCircle2,
   Settings,
   LogOut,
-  User,
-  Check,
 } from "lucide-react";
 
 interface TopNavbarProps {
@@ -24,9 +21,6 @@ export default function TopNavbar({
   onLogout,
 }: TopNavbarProps) {
   const pathname = usePathname();
-
-  const [showNotifications, setShowNotifications] =
-    useState(false);
 
   const [showProfile, setShowProfile] =
     useState(false);
@@ -125,17 +119,12 @@ export default function TopNavbar({
       {/* RIGHT SIDE */}
       <div className="flex shrink-0 items-center gap-1 sm:gap-3 md:gap-5">
 
-      
-
         {/* ================= ADMIN PROFILE ================= */}
         <div className="relative">
 
           <button
             type="button"
-            onClick={() => {
-              setShowProfile(!showProfile);
-              setShowNotifications(false);
-            }}
+            onClick={() => setShowProfile((prev) => !prev)}
             className="flex items-center gap-1 rounded-lg p-1.5 transition hover:bg-gray-100 sm:gap-2 sm:p-2"
           >
 
@@ -178,8 +167,6 @@ export default function TopNavbar({
                 </p>
 
               </div>
-
-             
 
               {/* Settings */}
               <button

@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase/client";
 import StatCard from "./StatCard";
 
 export default function DashboardStats() {
-  const supabase = createClient();
+  // Create the client once (not on every render) so it is safe as an effect dependency
+  const [supabase] = useState(() => createClient());
 
   const [stats, setStats] = useState({
     students: 0,
@@ -14,38 +15,42 @@ export default function DashboardStats() {
     advisors: 0,
   });
 
+  // Starts as true because stats are fetched as soon as the component mounts
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchDashboardStats();
-  }, []);
+    let cancelled = false;
 
-  async function fetchDashboardStats() {
-    setLoading(true);
+    async function loadDashboardStats() {
+      const [classesResult, studentsResult, staffResult] = await Promise.all([
+        supabase.from("classes").select("*", { count: "exact", head: true }),
+        supabase.from("students").select("*", { count: "exact", head: true }),
+        supabase.from("staff").select("*", { count: "exact", head: true }),
+      ]);
 
-    const [
-      classesResult,
-      studentsResult,
-      staffResult,
-    ] = await Promise.all([
-      supabase.from("classes").select("*", { count: "exact", head: true }),
-      supabase.from("students").select("*", { count: "exact", head: true }),
-      supabase.from("staff").select("*", { count: "exact", head: true }),
-    ]);
+      // Ignore the result if the component unmounted
+      if (cancelled) return;
 
-    const classCount = classesResult.count ?? 0;
-    const studentCount = studentsResult.count ?? 0;
-    const staffCount = staffResult.count ?? 0;
+      const classCount = classesResult.count ?? 0;
+      const studentCount = studentsResult.count ?? 0;
+      const staffCount = staffResult.count ?? 0;
 
-    setStats({
-      students: studentCount,
-      classes: classCount,
-      tutors: staffCount,
-      advisors: staffCount,
-    });
+      setStats({
+        students: studentCount,
+        classes: classCount,
+        tutors: staffCount,
+        advisors: staffCount,
+      });
 
-    setLoading(false);
-  }
+      setLoading(false);
+    }
+
+    loadDashboardStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   return (
     <section>
@@ -54,7 +59,6 @@ export default function DashboardStats() {
       </h2>
 
       <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
-
         <StatCard
           title="Total Students"
           value={loading ? "..." : stats.students.toString()}
@@ -78,7 +82,6 @@ export default function DashboardStats() {
           value={loading ? "..." : stats.advisors.toString()}
           color="bg-orange-500"
         />
-
       </div>
     </section>
   );

@@ -23,12 +23,20 @@ interface StaffType {
   section: string;
 }
 
+// Shape of a row returned by the class_staff query (with the joined staff record)
+interface AssignmentRow {
+  staff_id: string;
+  role: string;
+  staff: StaffType | StaffType[] | null;
+}
+
 interface Props {
   selectedClass: ClassType | null;
 }
 
 export default function ClassDetails({ selectedClass }: Props) {
-  const supabase = createClient();
+  // Create the client once (not on every render) so it is safe as an effect dependency
+  const [supabase] = useState(() => createClient());
 
   const [staff, setStaff] = useState<StaffType[]>([]);
   const [assignedStaff, setAssignedStaff] = useState<StaffType[]>([]);
@@ -38,68 +46,82 @@ export default function ClassDetails({ selectedClass }: Props) {
   const [selectedTutors, setSelectedTutors] = useState<string[]>([]);
   const [selectedAdvisor, setSelectedAdvisor] = useState<string>("");
 
+  // Bumping this value re-runs the data-loading effect (used after saving)
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const classId = selectedClass?.id;
+
   useEffect(() => {
-    if (selectedClass) {
-      fetchStaff();
-      fetchAssignments();
+    if (!classId) return;
+
+    let cancelled = false;
+
+    async function loadData() {
+      const [staffResult, assignmentResult] = await Promise.all([
+        supabase.from("staff").select("*").order("name"),
+        supabase
+          .from("class_staff")
+          .select(
+            `
+            staff_id,
+            role,
+            staff (
+              id,
+              name,
+              email,
+              role,
+              department,
+              year,
+              section
+            )
+          `
+          )
+          .eq("class_id", classId),
+      ]);
+
+      // Ignore the result if the component unmounted or the class changed
+      if (cancelled) return;
+
+      if (!staffResult.error && staffResult.data) {
+        setStaff(staffResult.data as StaffType[]);
+      }
+
+      if (assignmentResult.error) {
+        console.log("Assignment fetch error:", assignmentResult.error);
+        return;
+      }
+
+      if (assignmentResult.data) {
+        const rows = assignmentResult.data as unknown as AssignmentRow[];
+
+        const assigned = rows
+          .map((item) =>
+            Array.isArray(item.staff) ? item.staff[0] : item.staff
+          )
+          .filter((member): member is StaffType => Boolean(member));
+
+        setAssignedStaff(assigned);
+
+        setSelectedTutors(
+          rows
+            .filter((item) => item.role === "Tutor")
+            .map((item) => item.staff_id)
+        );
+
+        const advisorRow = rows.find(
+          (item) => item.role === "Class Advisor"
+        );
+
+        setSelectedAdvisor(advisorRow?.staff_id || "");
+      }
     }
-  }, [selectedClass]);
 
-  async function fetchStaff() {
-    const { data, error } = await supabase
-      .from("staff")
-      .select("*")
-      .order("name");
+    loadData();
 
-    if (!error && data) {
-      setStaff(data);
-    }
-  }
-
-  async function fetchAssignments() {
-    if (!selectedClass) return;
-
-    const { data, error } = await supabase
-      .from("class_staff")
-      .select(`
-        staff_id,
-        role,
-        staff (
-          id,
-          name,
-          email,
-          role,
-          department,
-          year,
-          section
-        )
-      `)
-      .eq("class_id", selectedClass.id);
-
-    if (error) {
-      console.log("Assignment fetch error:", error);
-      return;
-    }
-
-    if (data) {
-      const assigned = data
-        .map((item: any) => item.staff)
-        .filter(Boolean);
-
-      setAssignedStaff(assigned);
-
-      const tutors = data
-        .filter((item: any) => item.role === "Tutor")
-        .map((item: any) => item.staff_id);
-
-      const advisor = data.find(
-        (item: any) => item.role === "Class Advisor"
-      );
-
-      setSelectedTutors(tutors);
-      setSelectedAdvisor(advisor?.staff_id || "");
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, classId, refreshKey]);
 
   function toggleTutor(id: string) {
     setSelectedTutors((current) => {
@@ -160,15 +182,14 @@ export default function ClassDetails({ selectedClass }: Props) {
 
       setShowManage(false);
 
-      await fetchAssignments();
+      // Re-load assignments via the effect
+      setRefreshKey((key) => key + 1);
     } finally {
       setLoading(false);
     }
   }
 
-  const tutors = assignedStaff.filter(
-    (member) => member.role === "Tutor"
-  );
+  const tutors = assignedStaff.filter((member) => member.role === "Tutor");
 
   const advisor = assignedStaff.find(
     (member) => member.role === "Class Advisor"
@@ -203,11 +224,9 @@ export default function ClassDetails({ selectedClass }: Props) {
   return (
     <>
       <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-
         {/* Header */}
 
         <div className="mb-6 flex items-center justify-between">
-
           <div>
             <h2 className="text-xl font-semibold text-gray-800">
               Class Details
@@ -224,17 +243,13 @@ export default function ClassDetails({ selectedClass }: Props) {
           >
             Manage Staff
           </button>
-
         </div>
 
         {/* Class Information */}
 
         <div className="grid grid-cols-2 gap-4 rounded-xl bg-gray-50 p-4">
-
           <div>
-            <p className="text-xs uppercase text-gray-500">
-              Class
-            </p>
+            <p className="text-xs uppercase text-gray-500">Class</p>
 
             <p className="mt-1 font-semibold text-gray-800">
               {selectedClass.class_name}
@@ -242,9 +257,7 @@ export default function ClassDetails({ selectedClass }: Props) {
           </div>
 
           <div>
-            <p className="text-xs uppercase text-gray-500">
-              Department
-            </p>
+            <p className="text-xs uppercase text-gray-500">Department</p>
 
             <p className="mt-1 font-semibold text-gray-800">
               {selectedClass.department}
@@ -252,9 +265,7 @@ export default function ClassDetails({ selectedClass }: Props) {
           </div>
 
           <div>
-            <p className="text-xs uppercase text-gray-500">
-              Year
-            </p>
+            <p className="text-xs uppercase text-gray-500">Year</p>
 
             <p className="mt-1 font-semibold text-gray-800">
               {selectedClass.year}
@@ -262,9 +273,7 @@ export default function ClassDetails({ selectedClass }: Props) {
           </div>
 
           <div>
-            <p className="text-xs uppercase text-gray-500">
-              Section
-            </p>
+            <p className="text-xs uppercase text-gray-500">Section</p>
 
             <p className="mt-1 font-semibold text-gray-800">
               {selectedClass.section}
@@ -272,31 +281,23 @@ export default function ClassDetails({ selectedClass }: Props) {
           </div>
 
           <div className="col-span-2">
-            <p className="text-xs uppercase text-gray-500">
-              Batch
-            </p>
+            <p className="text-xs uppercase text-gray-500">Batch</p>
 
             <p className="mt-1 font-semibold text-gray-800">
               {selectedClass.batch}
             </p>
           </div>
-
         </div>
 
         {/* Tutors */}
 
         <div className="mt-8">
-
           <div className="mb-4 flex items-center justify-between">
-
-            <h3 className="font-semibold text-gray-700">
-              Tutors
-            </h3>
+            <h3 className="font-semibold text-gray-700">Tutors</h3>
 
             <span className="text-sm text-gray-500">
               {tutors.length} assigned
             </span>
-
           </div>
 
           {tutors.length === 0 ? (
@@ -305,19 +306,13 @@ export default function ClassDetails({ selectedClass }: Props) {
             </div>
           ) : (
             <div className="space-y-3">
-
               {tutors.map((tutor) => (
                 <div
                   key={tutor.id}
                   className="flex items-center justify-between rounded-xl border border-gray-200 p-4"
                 >
-
                   <div className="flex items-center gap-3">
-
-                    <UserCircle2
-                      size={42}
-                      className="text-gray-500"
-                    />
+                    <UserCircle2 size={42} className="text-gray-500" />
 
                     <div>
                       <p className="font-medium text-gray-800">
@@ -328,31 +323,22 @@ export default function ClassDetails({ selectedClass }: Props) {
                         {tutor.email}
                       </p>
                     </div>
-
                   </div>
 
                   <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
                     Tutor
                   </span>
-
                 </div>
               ))}
-
             </div>
           )}
-
         </div>
 
         {/* Class Advisor */}
 
         <div className="mt-8">
-
           <div className="mb-4 flex items-center justify-between">
-
-            <h3 className="font-semibold text-gray-700">
-              Class Advisor
-            </h3>
-
+            <h3 className="font-semibold text-gray-700">Class Advisor</h3>
           </div>
 
           {!advisor ? (
@@ -361,48 +347,34 @@ export default function ClassDetails({ selectedClass }: Props) {
             </div>
           ) : (
             <div className="flex items-center justify-between rounded-xl border border-gray-200 p-4">
-
               <div className="flex items-center gap-3">
-
-                <UserCircle2
-                  size={42}
-                  className="text-gray-500"
-                />
+                <UserCircle2 size={42} className="text-gray-500" />
 
                 <div>
                   <p className="font-medium text-gray-800">
                     {advisor.name}
                   </p>
 
-                  <p className="text-sm text-gray-500">
-                    {advisor.email}
-                  </p>
+                  <p className="text-sm text-gray-500">{advisor.email}</p>
                 </div>
-
               </div>
 
               <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
                 Advisor
               </span>
-
             </div>
           )}
-
         </div>
-
       </div>
 
       {/* Manage Staff Modal */}
 
       {showManage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-
             {/* Modal Header */}
 
             <div className="mb-6 flex items-center justify-between">
-
               <div>
                 <h2 className="text-2xl font-semibold text-gray-800">
                   Assign Staff
@@ -419,16 +391,12 @@ export default function ClassDetails({ selectedClass }: Props) {
               >
                 <X size={22} />
               </button>
-
             </div>
 
             {/* Tutors */}
 
             <div>
-
-              <h3 className="mb-3 font-semibold text-gray-800">
-                Tutors
-              </h3>
+              <h3 className="mb-3 font-semibold text-gray-800">Tutors</h3>
 
               {availableTutors.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-4 text-sm text-gray-500">
@@ -436,13 +404,11 @@ export default function ClassDetails({ selectedClass }: Props) {
                 </div>
               ) : (
                 <div className="space-y-2">
-
                   {availableTutors.map((tutor) => (
                     <label
                       key={tutor.id}
                       className="flex cursor-pointer items-center gap-3 rounded-lg border p-4 hover:bg-gray-50"
                     >
-
                       <input
                         type="checkbox"
                         checked={selectedTutors.includes(tutor.id)}
@@ -459,19 +425,15 @@ export default function ClassDetails({ selectedClass }: Props) {
                           {tutor.email}
                         </p>
                       </div>
-
                     </label>
                   ))}
-
                 </div>
               )}
-
             </div>
 
             {/* Class Advisor */}
 
             <div className="mt-8">
-
               <h3 className="mb-3 font-semibold text-gray-800">
                 Class Advisor
               </h3>
@@ -482,45 +444,37 @@ export default function ClassDetails({ selectedClass }: Props) {
                 </div>
               ) : (
                 <div className="space-y-2">
-
-                  {availableAdvisors.map((advisor) => (
+                  {availableAdvisors.map((item) => (
                     <label
-                      key={advisor.id}
+                      key={item.id}
                       className="flex cursor-pointer items-center gap-3 rounded-lg border p-4 hover:bg-gray-50"
                     >
-
                       <input
                         type="radio"
                         name="classAdvisor"
-                        checked={selectedAdvisor === advisor.id}
-                        onChange={() =>
-                          setSelectedAdvisor(advisor.id)
-                        }
+                        checked={selectedAdvisor === item.id}
+                        onChange={() => setSelectedAdvisor(item.id)}
                         className="h-4 w-4"
                       />
 
                       <div>
                         <p className="font-medium text-gray-800">
-                          {advisor.name}
+                          {item.name}
                         </p>
 
                         <p className="text-sm text-gray-500">
-                          {advisor.email}
+                          {item.email}
                         </p>
                       </div>
-
                     </label>
                   ))}
-
                 </div>
               )}
-
             </div>
 
             {/* Buttons */}
 
             <div className="mt-8 flex justify-end gap-3">
-
               <button
                 onClick={() => setShowManage(false)}
                 className="rounded-lg border border-gray-300 px-5 py-2.5 hover:bg-gray-50"
@@ -535,11 +489,8 @@ export default function ClassDetails({ selectedClass }: Props) {
               >
                 {loading ? "Saving..." : "Save Assignment"}
               </button>
-
             </div>
-
           </div>
-
         </div>
       )}
     </>

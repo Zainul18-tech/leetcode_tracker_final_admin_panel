@@ -136,7 +136,8 @@ export default function StaffTable({
   loading,
   refreshStaff,
 }: Props) {
-  const supabase = createClient();
+  // Create the client once (not on every render) so it is safe as an effect dependency
+  const [supabase] = useState(() => createClient());
 
   const [search, setSearch] = useState("");
 
@@ -147,7 +148,9 @@ export default function StaffTable({
   const [filterSection, setFilterSection] = useState("ALL");
 
   const [classes, setClasses] = useState<ClassType[]>([]);
-  const [loadingClasses, setLoadingClasses] = useState(false);
+
+  // Starts as true because classes are fetched as soon as the component mounts
+  const [loadingClasses, setLoadingClasses] = useState(true);
 
   const [assigningStaff, setAssigningStaff] =
     useState<Staff | null>(null);
@@ -170,30 +173,37 @@ export default function StaffTable({
   /*
    * Fetch classes for the Assign Class dropdown
    */
-  async function fetchClasses() {
-    setLoadingClasses(true);
+  useEffect(() => {
+    let cancelled = false;
 
-    const { data, error } = await supabase
-      .from("classes")
-      .select(
-        "id, class_name, department, year, section, batch"
-      )
-      .order("year")
-      .order("section");
+    async function loadClasses() {
+      const { data, error } = await supabase
+        .from("classes")
+        .select(
+          "id, class_name, department, year, section, batch"
+        )
+        .order("year")
+        .order("section");
 
-    if (error) {
-      console.error("Error fetching classes:", error);
-      setClasses([]);
-    } else {
-      setClasses(data || []);
+      // Ignore the result if the component unmounted
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Error fetching classes:", error);
+        setClasses([]);
+      } else {
+        setClasses(data || []);
+      }
+
+      setLoadingClasses(false);
     }
 
-    setLoadingClasses(false);
-  }
+    loadClasses();
 
-  useEffect(() => {
-    fetchClasses();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   /*
    * Open Assign Class modal
@@ -474,14 +484,10 @@ export default function StaffTable({
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-
       {/* Header */}
       <div className="border-b p-6">
-
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-
           <div>
-
             <h2 className="text-2xl font-semibold text-gray-800">
               Staff
             </h2>
@@ -489,22 +495,17 @@ export default function StaffTable({
             <p className="mt-1 text-sm text-gray-500">
               Manage staff members and assign them to classes.
             </p>
-
           </div>
 
           <span className="w-fit rounded-full bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700">
             {filteredStaff.length} Staff
           </span>
-
         </div>
-
       </div>
 
       {/* Search */}
       <div className="p-6 pb-0">
-
         <div className="relative">
-
           <Search
             size={18}
             className="absolute left-4 top-3.5 text-gray-400"
@@ -513,20 +514,15 @@ export default function StaffTable({
           <input
             type="text"
             value={search}
-            onChange={(e) =>
-              setSearch(e.target.value)
-            }
+            onChange={(e) => setSearch(e.target.value)}
             placeholder="Search staff..."
             className="w-full rounded-lg border border-gray-300 bg-white py-3 pl-11 pr-4 text-gray-900 placeholder:text-gray-400 outline-none focus:border-blue-500"
           />
-
         </div>
-
       </div>
 
       {/* Filter dropdowns */}
       <div className="flex flex-col flex-wrap gap-3 p-6 pb-0 md:flex-row md:items-center">
-
         <FilterDropdown
           label="Role"
           options={roleOptions}
@@ -564,18 +560,14 @@ export default function StaffTable({
             Clear Filters
           </button>
         )}
-
       </div>
 
       {/* Table */}
       {loading ? (
-
         <div className="p-10 text-center text-gray-500">
           Loading staff...
         </div>
-
       ) : filteredStaff.length === 0 ? (
-
         <div className="flex flex-col items-center justify-center py-14 text-center">
           <p className="text-lg font-medium text-gray-600">No data found</p>
           <p className="mt-1 text-sm text-gray-400">
@@ -592,77 +584,48 @@ export default function StaffTable({
             </button>
           )}
         </div>
-
       ) : (
-
         <div className="mt-6 overflow-x-auto">
-
           <table className="w-full">
-
             <thead className="bg-gray-50">
-
               <tr>
+                <th className="px-6 py-4 text-left">Staff</th>
 
-                <th className="px-6 py-4 text-left">
-                  Staff
-                </th>
+                <th className="px-6 py-4 text-left">Email</th>
 
-                <th className="px-6 py-4 text-left">
-                  Email
-                </th>
+                <th className="px-6 py-4 text-left">Role</th>
 
-                <th className="px-6 py-4 text-left">
-                  Role
-                </th>
+                <th className="px-6 py-4 text-left">Department</th>
 
-                <th className="px-6 py-4 text-left">
-                  Department
-                </th>
+                <th className="px-6 py-4 text-left">Class</th>
 
-                <th className="px-6 py-4 text-left">
-                  Class
-                </th>
-
-                <th className="px-6 py-4 text-center">
-                  Actions
-                </th>
-
+                <th className="px-6 py-4 text-center">Actions</th>
               </tr>
-
             </thead>
 
             <tbody>
-
               {filteredStaff.map((staffMember) => {
-
                 const assignedClass = classes.find(
                   (item) =>
-                    item.department ===
-                      staffMember.department &&
+                    item.department === staffMember.department &&
                     item.year === staffMember.year &&
-                    item.section ===
-                      staffMember.section
+                    item.section === staffMember.section
                 );
 
                 return (
-
                   <tr
                     key={staffMember.id}
                     className="border-t hover:bg-gray-50"
                   >
-
                     {/* Staff */}
                     <td className="px-6 py-4">
-
                       <div className="flex items-center gap-3">
-
                         <UserCircle2
                           size={42}
                           className="text-gray-400"
                         />
 
                         <div>
-
                           <p className="font-medium text-gray-800">
                             {staffMember.name}
                           </p>
@@ -670,11 +633,8 @@ export default function StaffTable({
                           <p className="text-sm text-gray-500">
                             {staffMember.id.slice(0, 8)}
                           </p>
-
                         </div>
-
                       </div>
-
                     </td>
 
                     {/* Email */}
@@ -684,45 +644,35 @@ export default function StaffTable({
 
                     {/* Role */}
                     <td className="px-6 py-4">
-
                       <span
                         className={`rounded-full px-3 py-1 text-xs font-medium ${
-                          staffMember.role ===
-                          "Class Advisor"
+                          staffMember.role === "Class Advisor"
                             ? "bg-green-100 text-green-700"
                             : "bg-blue-100 text-blue-700"
                         }`}
                       >
                         {staffMember.role}
                       </span>
-
                     </td>
 
                     {/* Department */}
                     <td className="px-6 py-4">
-
                       <div>
-
                         <p className="font-medium text-gray-800">
                           {staffMember.department}
                         </p>
 
                         <p className="text-sm text-gray-500">
-                          Year {staffMember.year} -
-                          Section {staffMember.section}
+                          Year {staffMember.year} - Section{" "}
+                          {staffMember.section}
                         </p>
-
                       </div>
-
                     </td>
 
                     {/* Class */}
                     <td className="px-6 py-4">
-
                       {assignedClass ? (
-
                         <div className="flex items-center gap-2">
-
                           <GraduationCap
                             size={18}
                             className="text-blue-600"
@@ -731,39 +681,26 @@ export default function StaffTable({
                           <span className="font-medium text-gray-700">
                             {assignedClass.class_name}
                           </span>
-
                         </div>
-
                       ) : (
-
                         <span className="text-sm text-gray-400">
                           Not assigned
                         </span>
-
                       )}
-
                     </td>
 
                     {/* Actions */}
                     <td className="px-6 py-4">
-
                       <div className="flex justify-center gap-2">
-
                         <button
-                          onClick={() =>
-                            openAssignModal(
-                              staffMember
-                            )
-                          }
+                          onClick={() => openAssignModal(staffMember)}
                           className="rounded-lg bg-blue-100 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-200"
                         >
                           Assign Class
                         </button>
 
                         <button
-                          onClick={() =>
-                            openEdit(staffMember)
-                          }
+                          onClick={() => openEdit(staffMember)}
                           className="rounded-lg bg-green-100 p-2 text-green-600 hover:bg-green-200"
                           title="Edit"
                         >
@@ -771,46 +708,29 @@ export default function StaffTable({
                         </button>
 
                         <button
-                          onClick={() =>
-                            deleteStaff(
-                              staffMember.id
-                            )
-                          }
+                          onClick={() => deleteStaff(staffMember.id)}
                           disabled={deletingId === staffMember.id}
                           className="rounded-lg bg-red-100 p-2 text-red-600 hover:bg-red-200 disabled:opacity-50"
                           title="Delete"
                         >
                           <Trash2 size={18} />
                         </button>
-
                       </div>
-
                     </td>
-
                   </tr>
-
                 );
               })}
-
             </tbody>
-
           </table>
-
         </div>
-
       )}
 
       {/* Assign Class Modal */}
       {assigningStaff && (
-
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
-
             <div className="mb-6 flex items-center justify-between">
-
               <div>
-
                 <h2 className="text-xl font-semibold text-gray-800">
                   Assign Class
                 </h2>
@@ -818,7 +738,6 @@ export default function StaffTable({
                 <p className="mt-1 text-sm text-gray-500">
                   Assign {assigningStaff.name} to a class.
                 </p>
-
               </div>
 
               <button
@@ -830,7 +749,6 @@ export default function StaffTable({
               >
                 <X size={20} />
               </button>
-
             </div>
 
             <label className="mb-2 block text-sm font-medium text-gray-700">
@@ -839,36 +757,23 @@ export default function StaffTable({
 
             <select
               value={selectedClassId}
-              onChange={(e) =>
-                setSelectedClassId(e.target.value)
-              }
+              onChange={(e) => setSelectedClassId(e.target.value)}
               disabled={loadingClasses}
               className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-black outline-none focus:border-blue-500"
             >
-
               <option value="">
-                {loadingClasses
-                  ? "Loading classes..."
-                  : "Select a class"}
+                {loadingClasses ? "Loading classes..." : "Select a class"}
               </option>
 
               {classes.map((classItem) => (
-
-                <option
-                  key={classItem.id}
-                  value={classItem.id}
-                >
-                  {classItem.class_name} -{" "}
-                  {classItem.department} -{" "}
+                <option key={classItem.id} value={classItem.id}>
+                  {classItem.class_name} - {classItem.department} -{" "}
                   {classItem.batch}
                 </option>
-
               ))}
-
             </select>
 
             <div className="mt-6 flex justify-end gap-3">
-
               <button
                 onClick={() => {
                   setAssigningStaff(null);
@@ -886,26 +791,17 @@ export default function StaffTable({
               >
                 Save Assignment
               </button>
-
             </div>
-
           </div>
-
         </div>
-
       )}
 
       {/* Edit Modal */}
       {editingStaff && (
-
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-
           <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl">
-
             <div className="mb-6 flex items-center justify-between">
-
               <div>
-
                 <h2 className="text-xl font-semibold text-gray-800">
                   Edit Staff
                 </h2>
@@ -913,40 +809,30 @@ export default function StaffTable({
                 <p className="mt-1 text-sm text-gray-500">
                   Update staff information.
                 </p>
-
               </div>
 
               <button
-                onClick={() =>
-                  setEditingStaff(null)
-                }
+                onClick={() => setEditingStaff(null)}
                 className="rounded-lg p-2 hover:bg-gray-100"
               >
                 <X size={20} />
               </button>
-
             </div>
 
             <div className="space-y-4">
-
               <div>
-
                 <label className="mb-2 block text-sm font-medium text-gray-700">
                   Name
                 </label>
 
                 <input
                   value={editName}
-                  onChange={(e) =>
-                    setEditName(e.target.value)
-                  }
+                  onChange={(e) => setEditName(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 p-3 text-black outline-none focus:border-blue-500"
                 />
-
               </div>
 
               <div>
-
                 <label className="mb-2 block text-sm font-medium text-gray-700">
                   Email
                 </label>
@@ -954,29 +840,20 @@ export default function StaffTable({
                 <input
                   type="email"
                   value={editEmail}
-                  onChange={(e) =>
-                    setEditEmail(e.target.value)
-                  }
+                  onChange={(e) => setEditEmail(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 p-3 text-black outline-none focus:border-blue-500"
                 />
-
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-
                 <div>
-
                   <label className="mb-2 block text-sm font-medium text-gray-700">
                     Department
                   </label>
 
                   <select
                     value={editDepartment}
-                    onChange={(e) =>
-                      setEditDepartment(
-                        e.target.value
-                      )
-                    }
+                    onChange={(e) => setEditDepartment(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 bg-white p-3 text-black"
                   >
                     <option>CSE</option>
@@ -984,44 +861,27 @@ export default function StaffTable({
                     <option>ECE</option>
                     <option>EEE</option>
                   </select>
-
                 </div>
 
                 <div>
-
                   <label className="mb-2 block text-sm font-medium text-gray-700">
                     Year
                   </label>
 
                   <select
                     value={editYear}
-                    onChange={(e) =>
-                      setEditYear(
-                        Number(e.target.value)
-                      )
-                    }
+                    onChange={(e) => setEditYear(Number(e.target.value))}
                     className="w-full rounded-lg border border-gray-300 bg-white p-3 text-black"
                   >
-                    <option value={1}>
-                      1st Year
-                    </option>
-                    <option value={2}>
-                      2nd Year
-                    </option>
-                    <option value={3}>
-                      3rd Year
-                    </option>
-                    <option value={4}>
-                      4th Year
-                    </option>
+                    <option value={1}>1st Year</option>
+                    <option value={2}>2nd Year</option>
+                    <option value={3}>3rd Year</option>
+                    <option value={4}>4th Year</option>
                   </select>
-
                 </div>
-
               </div>
 
               <div>
-
                 <label className="mb-2 block text-sm font-medium text-gray-700">
                   Section
                 </label>
@@ -1029,24 +889,17 @@ export default function StaffTable({
                 <input
                   value={editSection}
                   onChange={(e) =>
-                    setEditSection(
-                      e.target.value.toUpperCase()
-                    )
+                    setEditSection(e.target.value.toUpperCase())
                   }
                   placeholder="A"
                   className="w-full rounded-lg border border-gray-300 p-3 text-black outline-none focus:border-blue-500"
                 />
-
               </div>
-
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
-
               <button
-                onClick={() =>
-                  setEditingStaff(null)
-                }
+                onClick={() => setEditingStaff(null)}
                 className="rounded-lg border border-gray-300 px-5 py-2 hover:bg-gray-50"
               >
                 Cancel
@@ -1058,15 +911,10 @@ export default function StaffTable({
               >
                 Save Changes
               </button>
-
             </div>
-
           </div>
-
         </div>
-
       )}
-
     </div>
   );
 }

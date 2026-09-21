@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/client";
@@ -32,9 +32,24 @@ interface AssignmentType {
   role: string;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message || fallback;
+  }
+
+  return fallback;
+}
+
 export default function AssignStaffPage() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [classes, setClasses] = useState<ClassType[]>([]);
   const [staff, setStaff] = useState<StaffType[]>([]);
@@ -45,23 +60,29 @@ export default function AssignStaffPage() {
   const [selectedClass, setSelectedClass] =
     useState("");
 
-  const [selectedTutor, setSelectedTutor] =
-    useState("");
+  // What the user has picked in the dropdowns.
+  // null = "not changed", so the current saved assignment is shown.
+  const [tutorChoice, setTutorChoice] = useState<
+    string | null
+  >(null);
 
-  const [selectedAdvisor, setSelectedAdvisor] =
-    useState("");
+  const [advisorChoice, setAdvisorChoice] = useState<
+    string | null
+  >(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  async function fetchData() {
-    setLoading(true);
+  // Changing this number re-runs the fetch effect below
+  const [refreshKey, setRefreshKey] = useState(0);
 
-    const [
-      classesResult,
-      staffResult,
-      assignmentsResult,
-    ] = await Promise.all([
+  // Load classes, staff and assignments on first load and whenever
+  // refreshKey changes. State is only set inside the promise callback
+  // (never synchronously in the effect body), which is what React expects.
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([
       supabase
         .from("classes")
         .select("*")
@@ -75,59 +96,89 @@ export default function AssignStaffPage() {
         .in("role", ["Tutor", "Class Advisor"])
         .order("name"),
 
-      supabase
-        .from("class_staff")
-        .select("*"),
-    ]);
+      supabase.from("class_staff").select("*"),
+    ])
+      .then(
+        ([
+          classesResult,
+          staffResult,
+          assignmentsResult,
+        ]) => {
+          if (cancelled) return;
 
-    if (classesResult.error) {
-      console.error(classesResult.error);
-      alert(classesResult.error.message);
-    }
+          if (classesResult.error) {
+            console.error(classesResult.error);
+            alert(classesResult.error.message);
+          }
 
-    if (staffResult.error) {
-      console.error(staffResult.error);
-      alert(staffResult.error.message);
-    }
+          if (staffResult.error) {
+            console.error(staffResult.error);
+            alert(staffResult.error.message);
+          }
 
-    if (assignmentsResult.error) {
-      console.error(assignmentsResult.error);
-      alert(assignmentsResult.error.message);
-    }
+          if (assignmentsResult.error) {
+            console.error(assignmentsResult.error);
+            alert(assignmentsResult.error.message);
+          }
 
-    setClasses(classesResult.data ?? []);
-    setStaff(staffResult.data ?? []);
-    setAssignments(assignmentsResult.data ?? []);
+          setClasses(classesResult.data ?? []);
+          setStaff(staffResult.data ?? []);
+          setAssignments(assignmentsResult.data ?? []);
 
-    setLoading(false);
+          // Fresh data arrived, so show the saved assignments again
+          setTutorChoice(null);
+          setAdvisorChoice(null);
+
+          setLoading(false);
+        }
+      )
+      .catch((error: unknown) => {
+        if (cancelled) return;
+
+        console.error(error);
+        alert(
+          getErrorMessage(
+            error,
+            "Something went wrong while loading data."
+          )
+        );
+
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, refreshKey]);
+
+  // Current saved assignment for the selected class (calculated, not stored)
+  const currentTutorId = selectedClass
+    ? assignments.find(
+        (item) =>
+          item.class_id === selectedClass &&
+          item.role === "Tutor"
+      )?.staff_id ?? ""
+    : "";
+
+  const currentAdvisorId = selectedClass
+    ? assignments.find(
+        (item) =>
+          item.class_id === selectedClass &&
+          item.role === "Class Advisor"
+      )?.staff_id ?? ""
+    : "";
+
+  // What the dropdowns show: the user's pick if any, otherwise the saved value
+  const selectedTutor = tutorChoice ?? currentTutorId;
+  const selectedAdvisor = advisorChoice ?? currentAdvisorId;
+
+  function handleClassChange(classId: string) {
+    setSelectedClass(classId);
+
+    // Switching class clears any unsaved picks
+    setTutorChoice(null);
+    setAdvisorChoice(null);
   }
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  useEffect(() => {
-    if (!selectedClass) {
-      setSelectedTutor("");
-      setSelectedAdvisor("");
-      return;
-    }
-
-    const currentTutor = assignments.find(
-      (item) =>
-        item.class_id === selectedClass &&
-        item.role === "Tutor"
-    );
-
-    const currentAdvisor = assignments.find(
-      (item) =>
-        item.class_id === selectedClass &&
-        item.role === "Class Advisor"
-    );
-
-    setSelectedTutor(currentTutor?.staff_id ?? "");
-    setSelectedAdvisor(currentAdvisor?.staff_id ?? "");
-  }, [selectedClass, assignments]);
 
   async function assignStaff() {
     if (!selectedClass) {
@@ -239,12 +290,15 @@ export default function AssignStaffPage() {
 
       alert("Staff assignment updated successfully.");
 
-      await fetchData();
-    } catch (error: any) {
+      // Re-run the fetch effect to get the latest assignments
+      setRefreshKey((key) => key + 1);
+    } catch (error: unknown) {
       console.error(error);
       alert(
-        error?.message ||
+        getErrorMessage(
+          error,
           "Something went wrong while assigning staff."
+        )
       );
     } finally {
       setSaving(false);
@@ -325,7 +379,7 @@ export default function AssignStaffPage() {
               <select
                 value={selectedClass}
                 onChange={(e) =>
-                  setSelectedClass(e.target.value)
+                  handleClassChange(e.target.value)
                 }
                 className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-black outline-none focus:border-blue-500"
               >
@@ -357,7 +411,7 @@ export default function AssignStaffPage() {
               <select
                 value={selectedTutor}
                 onChange={(e) =>
-                  setSelectedTutor(e.target.value)
+                  setTutorChoice(e.target.value)
                 }
                 disabled={!selectedClass}
                 className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-black outline-none focus:border-blue-500 disabled:bg-gray-100"
@@ -387,7 +441,7 @@ export default function AssignStaffPage() {
               <select
                 value={selectedAdvisor}
                 onChange={(e) =>
-                  setSelectedAdvisor(e.target.value)
+                  setAdvisorChoice(e.target.value)
                 }
                 disabled={!selectedClass}
                 className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-black outline-none focus:border-blue-500 disabled:bg-gray-100"

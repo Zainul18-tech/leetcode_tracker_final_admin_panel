@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 
@@ -11,9 +11,19 @@ import AddStudentForm from "@/components/dashboard/AddStudentForm";
 import StudentsTable from "@/components/dashboard/StudentsTable";
 import type { ClassType } from "@/app/dashboard/admin/page";
 
+// Result of the "students in this class" count query, tagged with the
+// class and refreshKey it was fetched for so stale results are ignored.
+interface CountResult {
+  classId: string;
+  key: number;
+  count: number | null; // null = the query failed
+}
+
 export default function StudentsPage() {
   const router = useRouter();
-  const supabase = createClient();
+
+  // Memoized so the client stays stable between renders
+  const supabase = useMemo(() => createClient(), []);
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -21,67 +31,114 @@ export default function StudentsPage() {
   const [classesLoading, setClassesLoading] = useState(true);
 
   const [selectedClassId, setSelectedClassId] = useState("");
-  const [classStudentCount, setClassStudentCount] = useState<
-    number | null
-  >(null);
-  const [countLoading, setCountLoading] = useState(false);
+  const [countResult, setCountResult] =
+    useState<CountResult | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   function refreshStudents() {
     setRefreshKey((prev) => prev + 1);
   }
 
-  async function fetchClasses() {
-    setClassesLoading(true);
-
-    const { data, error } = await supabase
-      .from("classes")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error(error);
-      alert(error.message);
-    }
-
-    setClasses(data ?? []);
-    setClassesLoading(false);
-  }
-
+  // Fetch classes once on load.
+  // State is only set inside promise callbacks (never synchronously
+  // in the effect body), which is what React expects.
   useEffect(() => {
-    fetchClasses();
-  }, []);
+    let cancelled = false;
 
+    // Promise.resolve() turns Supabase's PromiseLike into a real Promise,
+    // so .catch() is available
+    Promise.resolve(
+      supabase
+        .from("classes")
+        .select("*")
+        .order("created_at", { ascending: false })
+    )
+      .then(({ data, error }) => {
+        if (cancelled) return;
+
+        if (error) {
+          console.error(error);
+          alert(error.message);
+        }
+
+        setClasses(data ?? []);
+        setClassesLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+
+        console.error("Unexpected error fetching classes:", error);
+        setClasses([]);
+        setClassesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  // Count the students in the selected class whenever the class or
+  // refreshKey changes. The result is stored with the class/key it belongs to.
   useEffect(() => {
-    async function fetchCount() {
-      if (!selectedClassId) {
-        setClassStudentCount(null);
-        return;
-      }
+    if (!selectedClassId) return;
 
-      setCountLoading(true);
+    let cancelled = false;
 
-      const { count, error } = await supabase
+    Promise.resolve(
+      supabase
         .from("students")
         .select("*", {
           count: "exact",
           head: true,
         })
-        .eq("class_id", selectedClassId);
+        .eq("class_id", selectedClassId)
+    )
+      .then(({ count, error }) => {
+        if (cancelled) return;
 
-      setCountLoading(false);
+        if (error) {
+          console.error(error);
+          alert(error.message);
 
-      if (error) {
-        console.error(error);
-        alert(error.message);
-        return;
-      }
+          setCountResult({
+            classId: selectedClassId,
+            key: refreshKey,
+            count: null,
+          });
+          return;
+        }
 
-      setClassStudentCount(count ?? 0);
-    }
+        setCountResult({
+          classId: selectedClassId,
+          key: refreshKey,
+          count: count ?? 0,
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
 
-    fetchCount();
-  }, [selectedClassId, refreshKey]);
+        console.error("Unexpected error counting students:", error);
+
+        setCountResult({
+          classId: selectedClassId,
+          key: refreshKey,
+          count: null,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, selectedClassId, refreshKey]);
+
+  // Derived values (calculated during render, not stored in state)
+  const countReady =
+    countResult !== null &&
+    countResult.classId === selectedClassId &&
+    countResult.key === refreshKey;
+
+  const classStudentCount = countReady ? countResult.count : null;
+  const countLoading = Boolean(selectedClassId) && !countReady;
 
   const selectedClassData =
     classes.find((item) => item.id === selectedClassId) ?? null;
@@ -129,7 +186,6 @@ export default function StudentsPage() {
     }
 
     setSelectedClassId("");
-    setClassStudentCount(null);
     refreshStudents();
   }
 
@@ -200,7 +256,7 @@ export default function StudentsPage() {
                 !selectedClassId ||
                 deleting ||
                 countLoading ||
-                classStudentCount === 0
+                !classStudentCount
               }
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-3 font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-300"
             >
@@ -216,6 +272,8 @@ export default function StudentsPage() {
             <p className="mt-3 text-sm text-gray-600">
               {countLoading
                 ? "Checking students in this class..."
+                : classStudentCount === null
+                ? "Could not check the students in this class."
                 : classStudentCount === 0
                 ? "This class has no students to delete."
                 : `${classStudentCount} student(s) will be permanently deleted.`}

@@ -35,6 +35,31 @@ function withTimeout<T>(
   });
 }
 
+/*
+ * Checks whether a thrown value is Supabase's "refresh token is
+ * invalid/missing" auth error.
+ *
+ * The caught value is `unknown`, so we narrow it safely instead of
+ * using `any`. Supabase auth errors expose `code` and `message`
+ * fields, so we read those defensively.
+ */
+function isInvalidRefreshTokenError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) {
+    return false;
+  }
+
+  const { code, message } = err as {
+    code?: unknown;
+    message?: unknown;
+  };
+
+  return (
+    code === "refresh_token_not_found" ||
+    (typeof message === "string" &&
+      message.includes("Refresh Token Not Found"))
+  );
+}
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
     request,
@@ -128,12 +153,8 @@ export async function proxy(request: NextRequest) {
     }
 
     user = data.user;
-  } catch (err: any) {
-    const isInvalidRefreshToken =
-      err?.code === "refresh_token_not_found" ||
-      err?.message?.includes("Refresh Token Not Found");
-
-    if (isInvalidRefreshToken) {
+  } catch (err: unknown) {
+    if (isInvalidRefreshTokenError(err)) {
       hadInvalidRefreshToken = true;
     } else {
       console.error(
@@ -213,7 +234,6 @@ export async function proxy(request: NextRequest) {
   /* ============================================
      NOT ADMIN
      ============================================ */
-
 
   await supabase.auth.signOut();
 

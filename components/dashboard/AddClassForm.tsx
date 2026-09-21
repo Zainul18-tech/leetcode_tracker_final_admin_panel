@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 interface Props {
